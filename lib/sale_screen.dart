@@ -46,67 +46,126 @@ class _SalesScreenState extends State<SalesScreen> {
   }
 
   void _loadModels() async {
-    QuerySnapshot snapshot =
-        await FirebaseFirestore.instance.collection('models').get();
-    setState(() {
-      _models = snapshot.docs
-          .map((doc) => '${doc['brand']} ${doc['model']}')
-          .toList();
-    });
+    try {
+      QuerySnapshot snapshot =
+          await FirebaseFirestore.instance.collection('models').get();
+      setState(() {
+        _models = snapshot.docs.map((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          return '${data['brand']} ${data['model']}';
+        }).toList();
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading models: $e')),
+        );
+      }
+    }
   }
 
   void _showPartsPopup(String modelName) async {
-    QuerySnapshot snapshot = await FirebaseFirestore.instance
-        .collection('models')
-        .where('model', isEqualTo: modelName.split(' ').last)
-        .limit(1)
-        .get();
+    try {
+      // Split the model name into brand and model parts
+      List<String> nameParts = modelName.split(' ');
+      String brand = nameParts[0]; // First part is the brand
+      // Join the rest and convert to uppercase to match storage format
+      String model = nameParts.sublist(1).join(' ').toUpperCase();
 
-    if (snapshot.docs.isNotEmpty) {
-      List<Map<String, dynamic>> parts =
-          List<Map<String, dynamic>>.from(snapshot.docs.first['parts']);
-      showDialog(
-        context: context,
-        builder: (BuildContext context) {
-          return AlertDialog(
-            title: Text('Available Parts for $modelName'),
-            content: SizedBox(
-              width: double.maxFinite,
-              child: ListView.builder(
-                itemCount: parts.length,
-                itemBuilder: (context, index) {
-                  final part = parts[index];
-                  return ListTile(
-                    title: Text(part['partType']),
-                    subtitle: Text(
-                      'Price: ₹${part['price']} | Available: ${part['quantity']}',
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.add),
-                      onPressed: () {
-                        if (part['quantity'] > 0) {
-                          _addPart(part, modelName, snapshot.docs.first.id);
-                          Navigator.of(context).pop();
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Part out of stock')),
-                          );
-                        }
-                      },
-                    ),
-                  );
-                },
-              ),
-            ),
-            actions: [
-              TextButton(
-                child: const Text('Close'),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-            ],
+      print('Searching for - Brand: $brand, Model: $model'); // Debug log
+
+      QuerySnapshot snapshot = await FirebaseFirestore.instance
+          .collection('models')
+          .where('brand', isEqualTo: brand)
+          .where('model', isEqualTo: model)
+          .limit(1)
+          .get();
+
+      if (snapshot.docs.isEmpty) {
+        // Try searching by modelLower for case-insensitive match
+        snapshot = await FirebaseFirestore.instance
+            .collection('models')
+            .where('brand', isEqualTo: brand)
+            .where('modelLower', isEqualTo: model.toLowerCase())
+            .limit(1)
+            .get();
+      }
+
+      if (snapshot.docs.isNotEmpty) {
+        List<Map<String, dynamic>> parts =
+            List<Map<String, dynamic>>.from(snapshot.docs.first['parts']);
+
+        if (parts.isEmpty) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('No parts found for model: $modelName')),
+            );
+          }
+          return;
+        }
+
+        if (context.mounted) {
+          showDialog(
+            context: context,
+            builder: (BuildContext context) {
+              return AlertDialog(
+                title: Text('Available Parts for $modelName'),
+                content: SizedBox(
+                  width: double.maxFinite,
+                  child: ListView.builder(
+                    itemCount: parts.length,
+                    itemBuilder: (context, index) {
+                      final part = parts[index];
+                      return ListTile(
+                        title: Text(part['partType']),
+                        subtitle: Text(
+                          'Price: ₹${part['price']} | Available: ${part['quantity']}',
+                        ),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.add),
+                          onPressed: () {
+                            if (part['quantity'] > 0) {
+                              _addPart(part, modelName, snapshot.docs.first.id);
+                              Navigator.of(context).pop();
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text('Part out of stock')),
+                              );
+                            }
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    child: const Text('Close'),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              );
+            },
           );
-        },
-      );
+        }
+      } else {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  'Model not found: $modelName\nBrand: $brand, Model: $model'),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading parts: $e')),
+        );
+      }
     }
   }
 
