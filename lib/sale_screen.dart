@@ -119,7 +119,7 @@ class _SalesScreenState extends State<SalesScreen> {
                       return ListTile(
                         title: Text(part['partType']),
                         subtitle: Text(
-                          'Price: ₹${part['price']} | Available: ${part['quantity']}',
+                          'Price: ₹${part['price']} | Available: ${part['quantity']}${part['color'] != null ? ' | Color: ${part['color']}' : ''}',
                         ),
                         trailing: IconButton(
                           icon: const Icon(Icons.add),
@@ -297,8 +297,22 @@ class _SalesScreenState extends State<SalesScreen> {
             final part = _selectedParts[index];
             return ListTile(
               title: Text(part['partType']),
-              subtitle: Text(
-                  'Price: ₹${part['price']} | Model: ${part['model']} | Quantity: ${part['quantity']}'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Price: ₹${part['price']} | Model: ${part['model']} | Quantity: ${part['quantity']}',
+                  ),
+                  if (part['color'] != null) // Only show color if it exists
+                    Text(
+                      'Color: ${part['color']}',
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 12,
+                      ),
+                    ),
+                ],
+              ),
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -325,7 +339,8 @@ class _SalesScreenState extends State<SalesScreen> {
                         } else {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                                content: Text('Maximum quantity reached')),
+                              content: Text('Maximum quantity reached'),
+                            ),
                           );
                         }
                       });
@@ -601,7 +616,19 @@ class _SalesScreenState extends State<SalesScreen> {
 
   Future<void> _completeSale() async {
     try {
-      // Create sale record first
+      // Get current customer balance before making any changes
+      DocumentSnapshot customerSnapshot = await FirebaseFirestore.instance
+          .collection('customers')
+          .doc(_selectedCustomerId)
+          .get();
+
+      double currentBalance = 0.0;
+      if (customerSnapshot.exists) {
+        currentBalance = (customerSnapshot.data()
+            as Map<String, dynamic>)['balance'] as double;
+      }
+
+      // Create sale record with balance at time of sale
       DocumentReference saleRef =
           await FirebaseFirestore.instance.collection('sales').add({
         'customerId': _selectedCustomerId,
@@ -611,6 +638,7 @@ class _SalesScreenState extends State<SalesScreen> {
         'paymentMethod': _paymentMethod,
         'partialPaymentAmount': _partialPaymentAmount,
         'date': Timestamp.now(),
+        'balanceAtSale': currentBalance, // Store the balance at time of sale
       });
 
       // Update stock quantities with linked models support

@@ -22,7 +22,7 @@ class CustomerSelectionDialog extends StatelessWidget {
                   return ListView(
                     children: snapshot.data!.docs.map((doc) {
                       final data = doc.data() as Map<String, dynamic>;
-                      final customer = Customer(
+                      final customer = (
                         id: doc.id,
                         name: data['name'] as String? ?? 'Unknown',
                         phone: data['phone'] as String? ?? 'N/A',
@@ -43,7 +43,8 @@ class CustomerSelectionDialog extends StatelessWidget {
                 // Navigate to the AddCustomerScreen
                 final newCustomer = await Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => AddCustomerScreen()),
+                  MaterialPageRoute(
+                      builder: (context) => CustomerManagementScreen()),
                 );
 
                 // If a new customer is added, close the dialog and return the new customer

@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:phonefixer_shop/add_parts_screen.dart';
 import 'package:phonefixer_shop/model_parts_screen.dart';
-import 'package:phonefixer_shop/predfined_screen.dart'; // Firebase Firestore
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -13,227 +11,402 @@ class InventoryScreen extends StatefulWidget {
 
 class _InventoryScreenState extends State<InventoryScreen> {
   String _searchQuery = '';
-  List<QueryDocumentSnapshot> _filteredModels = [];
+  String _selectedBrand = 'All Brands';
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  final int _pageSize = 10;
+  bool _isLoadingMore = false;
+  bool _hasMoreData = true;
+  List<QueryDocumentSnapshot> _models = [];
+  DocumentSnapshot? _lastDocument;
+  bool _isSearching = false;
+
+  final List<String> _brands = [
+    'All Brands',
+    'Samsung',
+    'Vivo',
+    'Oppo',
+    'Realme',
+    'Mi',
+    'OnePlus',
+    'iPhone',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInitialData();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Query _createQuery() {
+    Query query = FirebaseFirestore.instance.collection('models');
+
+    if (_selectedBrand != 'All Brands') {
+      query = query.where('brand', isEqualTo: _selectedBrand);
+    }
+
+    return query;
+  }
+
+  Future<void> _loadInitialData() async {
+    setState(() {
+      _isLoadingMore = true;
+      _models = [];
+      _lastDocument = null;
+    });
+
+    try {
+      final QuerySnapshot snapshot =
+          await _createQuery().limit(_pageSize).get();
+
+      setState(() {
+        _models = snapshot.docs;
+        _lastDocument = snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+        _hasMoreData = snapshot.docs.length == _pageSize;
+        _isLoadingMore = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoadingMore = false;
+      });
+      print('Error loading initial data: $e');
+    }
+  }
+
+  Future<void> _loadMoreData() async {
+    if (_isLoadingMore || !_hasMoreData || _isSearching) return;
+
+    setState(() {
+      _isLoadingMore = true;
+    });
+
+    try {
+      final QuerySnapshot snapshot = await _createQuery()
+          .startAfterDocument(_lastDocument!)
+          .limit(_pageSize)
+          .get();
+
+      setState(() {
+        _models.addAll(snapshot.docs);
+        _lastDocument = snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+        _hasMoreData = snapshot.docs.length == _pageSize;
+        _isLoadingMore = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoadingMore = false;
+      });
+      print('Error loading more data: $e');
+    }
+  }
+
+  Future<List<QueryDocumentSnapshot>> _searchModels(String query) async {
+    Query searchQuery = FirebaseFirestore.instance.collection('models');
+
+    if (_selectedBrand != 'All Brands') {
+      searchQuery = searchQuery.where('brand', isEqualTo: _selectedBrand);
+    }
+
+    final QuerySnapshot snapshot = await searchQuery.get();
+    return snapshot.docs.where((doc) {
+      final modelData = doc.data() as Map<String, dynamic>;
+      final brand = (modelData['brand'] ?? '').toString().toLowerCase();
+      final modelName = (modelData['model'] ?? '').toString().toLowerCase();
+
+      return modelName.contains(query.toLowerCase()) ||
+          brand.contains(query.toLowerCase());
+    }).toList();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
+      _loadMoreData();
+    }
+  }
+
+  void _onSearchChanged(String value) async {
+    setState(() {
+      _searchQuery = value;
+      _isSearching = value.isNotEmpty;
+    });
+
+    if (value.isNotEmpty) {
+      final searchResults = await _searchModels(value);
+      setState(() {
+        _models = searchResults;
+        _hasMoreData = false;
+      });
+    } else {
+      _refreshData();
+    }
+  }
+
+  void _refreshData() {
+    setState(() {
+      _models = [];
+      _lastDocument = null;
+      _hasMoreData = true;
+      _isSearching = false;
+      _searchQuery = '';
+      _searchController.clear();
+    });
+    _loadInitialData();
+  }
+
+  void _onBrandChanged(String? value) {
+    setState(() {
+      _selectedBrand = value!;
+      _models = [];
+      _lastDocument = null;
+      _hasMoreData = true;
+      _isSearching = false;
+      _searchQuery = '';
+      _searchController.clear();
+    });
+    _loadInitialData();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Inventory'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.clear),
-            onPressed: () {
-              setState(() {
-                _searchQuery = ''; // Clear search on button press
-                _searchController.clear(); // Clear text in the search bar
-                FocusScope.of(context)
-                    .unfocus(); // Remove focus from the search bar
-              });
-            },
-          ),
-        ],
+        title: const Text('PhoneFixer'),
       ),
       body: Column(
         children: [
-          _buildSearchBar(),
+          _buildSearchAndFilterRow(),
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream:
-                  FirebaseFirestore.instance.collection('models').snapshots(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                final models = snapshot.data!.docs;
-
-                // Filter models based on the search query for both brand and model
-                _filteredModels = models.where((model) {
-                  var modelData = model.data() as Map<String, dynamic>;
-                  String brand = modelData['brand'].toLowerCase();
-                  String modelName = modelData['model'].toLowerCase();
-                  return modelName.contains(_searchQuery.toLowerCase()) ||
-                      brand.contains(_searchQuery.toLowerCase());
-                }).toList();
-
-                if (_filteredModels.isEmpty) {
-                  return const Center(
-                    child: Text(
-                      'No models found. Please adjust your search.',
-                      style: TextStyle(fontSize: 18, color: Colors.grey),
-                    ),
-                  );
-                }
-
-                return ListView.builder(
-                  itemCount: _filteredModels.length,
-                  itemBuilder: (context, index) {
-                    var modelData =
-                        _filteredModels[index].data() as Map<String, dynamic>;
-                    String brand = modelData['brand'];
-                    String modelName = modelData['model'];
-                    List parts = modelData['parts'];
-
-                    return Card(
-                      margin: const EdgeInsets.symmetric(
-                          vertical: 4, horizontal: 16),
-                      elevation: 2,
-                      child: ListTile(
-                        title: Text(
-                          '$brand $modelName',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const SizedBox(height: 4),
-                            Text('Total Parts: ${parts.length}',
-                                style: const TextStyle(
-                                    fontSize: 12, color: Colors.grey)),
-                            const Divider(),
-                            ...parts.map<Widget>((part) {
-                              // Safely get quantity and threshold, defaulting to 0 if null
-                              int quantity = part['quantity'] ?? 0;
-                              int threshold = part['threshold'] ?? 0;
-                              String? partColor = part['color'];
-                              String partType = part['partType'];
-                              double price = (part['price'] ?? 0).toDouble();
-
-                              // Determine if the part price should be red based on threshold
-                              bool isThresholdExceeded = quantity < threshold;
-
-                              return Padding(
-                                padding: const EdgeInsets.only(top: 4.0),
-                                child: Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          '$partType',
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            fontSize: 14,
-                                          ),
-                                        ),
-                                        if (partColor != null) ...[
-                                          Text(
-                                            'Color: $partColor',
-                                            style: const TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.blueGrey),
-                                          ),
-                                        ],
-                                      ],
-                                    ),
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.end,
-                                      children: [
-                                        Text(
-                                          '₹${price.toStringAsFixed(2)}',
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.bold,
-                                            color: isThresholdExceeded
-                                                ? Colors.red
-                                                : Colors.black,
-                                          ),
-                                        ),
-                                        Text(
-                                          'Qty: $quantity',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: isThresholdExceeded
-                                                ? Colors.red
-                                                : Colors.green,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }).toList(),
-                          ],
-                        ),
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => ModelPartsScreen(
-                                modelId: _filteredModels[index].id,
-                                brand: '',
-                              ),
-                            ),
-                          );
-                        },
-                        onLongPress: () {
-                          _showDeleteConfirmationDialog(
-                              context, _filteredModels[index]);
-                        },
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          FloatingActionButton(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const AddModelScreen()),
-              );
-            },
-            child: const Icon(Icons.add),
-            tooltip: 'Add Model',
-          ),
-          const SizedBox(height: 10),
-          FloatingActionButton(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (context) => PredefinedPartsScreen()),
-              );
-            },
-            child: const Icon(Icons.build),
-            tooltip: 'Manage Predefined Parts',
+            child: _buildModelsList(),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildSearchBar() {
+  Widget _buildSearchAndFilterRow() {
     return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: TextField(
-        controller:
-            _searchController, // Attach the controller to the search bar
-        decoration: const InputDecoration(
-          labelText: 'Search by Model or Brand',
-          border: OutlineInputBorder(),
-          suffixIcon: Icon(Icons.search),
+      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 12.0),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              height: 50,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.grey.withOpacity(0.3),
+                    spreadRadius: 2,
+                    blurRadius: 5,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: TextField(
+                controller: _searchController,
+                decoration: InputDecoration(
+                  labelText: 'Search by Model or Brand',
+                  labelStyle: const TextStyle(fontSize: 14),
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, color: Colors.grey),
+                          onPressed: () {
+                            _onSearchChanged('');
+                          },
+                        )
+                      : const Icon(Icons.search, color: Colors.grey),
+                ),
+                onChanged: _onSearchChanged,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Container(
+            width: 130,
+            height: 50,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.grey.withOpacity(0.3),
+                  spreadRadius: 2,
+                  blurRadius: 5,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: DropdownButtonFormField<String>(
+              value: _selectedBrand,
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+              ),
+              icon: const Icon(Icons.arrow_drop_down, color: Colors.grey),
+              items: _brands.map((brand) {
+                return DropdownMenuItem<String>(
+                  value: brand,
+                  child: Text(
+                    brand,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                );
+              }).toList(),
+              onChanged: _onBrandChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModelsList() {
+    if (_models.isEmpty && !_isLoadingMore) {
+      return const Center(
+        child: Text(
+          'No models found. Please adjust your search.',
+          style: TextStyle(fontSize: 18, color: Colors.grey),
         ),
-        onChanged: (value) {
-          setState(() {
-            _searchQuery = value; // Update search query
-          });
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        _refreshData();
+      },
+      child: ListView.builder(
+        controller: _scrollController,
+        itemCount: _models.length + (_hasMoreData ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (index == _models.length) {
+            return _buildLoadingIndicator();
+          }
+          return _buildModelCard(_models[index]);
+        },
+      ),
+    );
+  }
+
+  // ... rest of the code remains the same (_buildLoadingIndicator, _buildModelCard, _showDeleteConfirmationDialog)
+
+  Widget _buildLoadingIndicator() {
+    return _isLoadingMore
+        ? const Padding(
+            padding: EdgeInsets.all(8.0),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        : const SizedBox();
+  }
+
+  Widget _buildModelCard(QueryDocumentSnapshot model) {
+    final modelData = model.data() as Map<String, dynamic>;
+    final brand = (modelData['brand'] ?? '').toString();
+    final modelName = (modelData['model'] ?? '').toString();
+    final parts = List.from(modelData['parts'] ?? []);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
+      elevation: 2,
+      child: ListTile(
+        title: Text(
+          '$brand $modelName',
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 4),
+            Text('Total Parts: ${parts.length}',
+                style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            const Divider(),
+            ...parts.map<Widget>((part) {
+              final quantity = (part['quantity'] ?? 0) as int;
+              final threshold = (part['threshold'] ?? 0) as int;
+              final partColor = (part['color'] ?? '').toString();
+              final partType = (part['partType'] ?? '').toString();
+              final price = (part['price'] ?? 0.0).toDouble();
+              final isThresholdExceeded = quantity < threshold;
+
+              return Padding(
+                padding: const EdgeInsets.only(top: 4.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$partType',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                        if (partColor.isNotEmpty)
+                          Text(
+                            'Color: $partColor',
+                            style: const TextStyle(
+                                fontSize: 12, color: Colors.blueGrey),
+                          ),
+                      ],
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '₹${price.toStringAsFixed(2)}',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color:
+                                isThresholdExceeded ? Colors.red : Colors.black,
+                          ),
+                        ),
+                        Text(
+                          'Qty: $quantity',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color:
+                                isThresholdExceeded ? Colors.red : Colors.green,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ],
+        ),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ModelPartsScreen(
+                modelId: model.id,
+                brand: brand,
+                modelName: model['model'], // Pass the actual model name
+              ),
+            ),
+          );
+        },
+        onLongPress: () {
+          _showDeleteConfirmationDialog(context, model);
         },
       ),
     );
@@ -249,19 +422,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
           content: const Text('Are you sure you want to delete this model?'),
           actions: [
             TextButton(
-              onPressed: () {
-                Navigator.of(context).pop(); // Close the dialog
-              },
-              child: const Text('Cancel'),
-            ),
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel')),
             TextButton(
               onPressed: () {
-                // Call the delete method here
                 FirebaseFirestore.instance
                     .collection('models')
                     .doc(model.id)
-                    .delete();
-                Navigator.of(context).pop(); // Close the dialog
+                    .delete()
+                    .then((_) => Navigator.pop(context))
+                    .catchError((error) => print("Failed to delete: $error"));
               },
               child: const Text('Delete'),
             ),

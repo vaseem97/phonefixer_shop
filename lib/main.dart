@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:phonefixer_shop/Inventory_screen.dart';
+import 'package:phonefixer_shop/dashboard_screen.dart';
 import 'package:phonefixer_shop/report_screen.dart';
 import 'package:phonefixer_shop/sale_screen.dart';
 
@@ -36,7 +37,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final List<Widget> _pages = [
     const InventoryScreen(),
     const SalesScreen(),
-    const SalesListScreen(),
+    const AdminPanel(),
   ];
 
   @override

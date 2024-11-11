@@ -1,14 +1,18 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:phonefixer_shop/linking_parts.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 class ModelPartsScreen extends StatefulWidget {
   final String modelId;
   final String brand;
+  final String modelName; // New parameter for the model name
 
   const ModelPartsScreen({
     required this.modelId,
     required this.brand,
+    required this.modelName, // Add this parameter
+
     super.key,
   });
 
@@ -22,6 +26,7 @@ class _ModelPartsScreenState extends State<ModelPartsScreen> {
   List<DocumentSnapshot> allModels = [];
   final ModelPartsLinking _linking = ModelPartsLinking();
   String searchQuery = '';
+  bool isConnected = true;
 
   final List<String> partTypes = [
     'Display',
@@ -40,6 +45,8 @@ class _ModelPartsScreenState extends State<ModelPartsScreen> {
   void initState() {
     super.initState();
     _loadModelParts();
+    _checkConnectivity();
+    _setupConnectivityStream();
     _loadPredefinedParts();
     _loadAllModels();
   }
@@ -261,6 +268,80 @@ class _ModelPartsScreenState extends State<ModelPartsScreen> {
     _saveParts();
   }
 
+  void _setupConnectivityStream() {
+    Connectivity()
+        .onConnectivityChanged
+        .listen((List<ConnectivityResult> results) {
+      if (!mounted) return;
+
+      setState(() {
+        // If any connection type is available, consider it connected
+        isConnected =
+            results.any((result) => result != ConnectivityResult.none);
+      });
+
+      if (isConnected) {
+        _loadModelParts();
+        _loadPredefinedParts();
+        _loadAllModels();
+      }
+    });
+  }
+
+  Future<void> _checkConnectivity() async {
+    final results = await Connectivity().checkConnectivity();
+    if (!mounted) return;
+
+    setState(() {
+      isConnected = results != ConnectivityResult.none;
+    });
+  }
+
+  Future<void> _deletePart(Map<String, dynamic> part) async {
+    try {
+      // Show confirmation dialog
+      bool confirmDelete = await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Delete Part'),
+              content:
+                  Text('Are you sure you want to delete ${part['partType']}?'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child:
+                      const Text('Delete', style: TextStyle(color: Colors.red)),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+
+      if (!confirmDelete) return;
+
+      setState(() {
+        parts.remove(part);
+      });
+      await _saveParts();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Part deleted successfully')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error deleting part: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _saveParts() async {
     try {
       await _linking.savePartsToFirestore(
@@ -291,9 +372,27 @@ class _ModelPartsScreenState extends State<ModelPartsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!isConnected) {
+      return Scaffold(
+        appBar:
+            AppBar(title: Text('${widget.brand} ${widget.modelName} Parts')),
+        body: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.wifi_off, size: 48, color: Colors.grey),
+              SizedBox(height: 16),
+              Text('No Internet Connection'),
+              Text('Please check your connection and try again'),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Model Parts'),
+        title: Text('${widget.brand} ${widget.modelName} Parts'),
         actions: [
           IconButton(
             icon: const Icon(Icons.save),
@@ -311,121 +410,133 @@ class _ModelPartsScreenState extends State<ModelPartsScreen> {
                       var part = parts[index];
                       return Padding(
                         padding: const EdgeInsets.all(8.0),
-                        child: Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  part['partType'],
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
+                        child: GestureDetector(
+                          onLongPress: () => _deletePart(part),
+                          child: Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(16.0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        part['partType'],
+                                        style: const TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      if (part['color'] != null)
+                                        Chip(label: Text(part['color'])),
+                                    ],
                                   ),
-                                ),
-                                const SizedBox(height: 16),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: TextFormField(
-                                        initialValue:
-                                            part['price']?.toString() ?? '0',
-                                        decoration: const InputDecoration(
-                                          labelText: 'Price',
-                                          border: OutlineInputBorder(),
+                                  const SizedBox(height: 16),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextFormField(
+                                          initialValue:
+                                              part['price']?.toString() ?? '0',
+                                          decoration: const InputDecoration(
+                                            labelText: 'Price',
+                                            border: OutlineInputBorder(),
+                                            prefixText: '₹',
+                                          ),
+                                          keyboardType: TextInputType.number,
+                                          onChanged: (value) {
+                                            setState(() {
+                                              part['price'] =
+                                                  double.tryParse(value) ?? 0;
+                                            });
+                                          },
                                         ),
-                                        keyboardType: TextInputType.number,
-                                        onChanged: (value) {
-                                          setState(() {
-                                            part['price'] =
-                                                double.tryParse(value) ?? 0;
-                                          });
-                                        },
                                       ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: TextFormField(
+                                          initialValue:
+                                              part['quantity']?.toString() ??
+                                                  '0',
+                                          decoration: const InputDecoration(
+                                            labelText: 'Quantity',
+                                            border: OutlineInputBorder(),
+                                          ),
+                                          keyboardType: TextInputType.number,
+                                          onChanged: (value) {
+                                            setState(() {
+                                              part['quantity'] =
+                                                  int.tryParse(value) ?? 0;
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: TextFormField(
+                                          initialValue:
+                                              part['threshold']?.toString() ??
+                                                  '0',
+                                          decoration: const InputDecoration(
+                                            labelText: 'Threshold',
+                                            border: OutlineInputBorder(),
+                                          ),
+                                          keyboardType: TextInputType.number,
+                                          onChanged: (value) {
+                                            setState(() {
+                                              part['threshold'] =
+                                                  int.tryParse(value) ?? 0;
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (part['linkedModels'] != null &&
+                                      (part['linkedModels'] as List)
+                                          .isNotEmpty) ...[
+                                    const SizedBox(height: 16),
+                                    const Text(
+                                      'Linked Models:',
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold),
                                     ),
-                                    const SizedBox(width: 16),
-                                    Expanded(
-                                      child: TextFormField(
-                                        initialValue:
-                                            part['quantity']?.toString() ?? '0',
-                                        decoration: const InputDecoration(
-                                          labelText: 'Quantity',
-                                          border: OutlineInputBorder(),
-                                        ),
-                                        keyboardType: TextInputType.number,
-                                        onChanged: (value) {
-                                          setState(() {
-                                            part['quantity'] =
-                                                int.tryParse(value) ?? 0;
-                                          });
-                                        },
-                                      ),
+                                    const SizedBox(height: 8),
+                                    Wrap(
+                                      spacing: 8,
+                                      children: (part['linkedModels'] as List)
+                                          .map((modelInfo) => Chip(
+                                                label: Text(modelInfo['model']),
+                                                onDeleted: () async {
+                                                  await _linking.unlinkModel(
+                                                    context,
+                                                    part,
+                                                    modelInfo,
+                                                    widget.modelId,
+                                                    () async {
+                                                      await _loadModelParts();
+                                                    },
+                                                  );
+                                                },
+                                              ))
+                                          .toList(),
                                     ),
                                   ],
-                                ),
-                                const SizedBox(height: 16),
-                                TextFormField(
-                                  initialValue:
-                                      part['threshold']?.toString() ?? '0',
-                                  decoration: const InputDecoration(
-                                    labelText: 'Threshold',
-                                    border: OutlineInputBorder(),
-                                  ),
-                                  keyboardType: TextInputType.number,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      part['threshold'] =
-                                          int.tryParse(value) ?? 0;
-                                    });
-                                  },
-                                ),
-                                if (part['color'] != null) ...[
                                   const SizedBox(height: 8),
-                                  Text('Color: ${part['color']}'),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: ElevatedButton.icon(
+                                      onPressed: () =>
+                                          _showModelSearchDialog(part),
+                                      icon: const Icon(Icons.link),
+                                      label: const Text('Link New Model'),
+                                    ),
+                                  ),
                                 ],
-                                const SizedBox(height: 16),
-                                if (part['linkedModels'] != null &&
-                                    (part['linkedModels'] as List)
-                                        .isNotEmpty) ...[
-                                  const Text(
-                                    'Linked Models:',
-                                    style:
-                                        TextStyle(fontWeight: FontWeight.bold),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  const SizedBox(height: 8),
-                                  Wrap(
-                                    spacing: 8,
-                                    children: (part['linkedModels'] as List)
-                                        .map((modelInfo) => Chip(
-                                              label: Text(modelInfo['model']),
-                                              onDeleted: () async {
-                                                await _linking.unlinkModel(
-                                                  context,
-                                                  part,
-                                                  modelInfo,
-                                                  widget.modelId,
-                                                  () async {
-                                                    await _loadModelParts(); // Reload parts after unlinking
-                                                  },
-                                                );
-                                              },
-                                            ))
-                                        .toList(),
-                                  ),
-                                  const SizedBox(height: 8),
-                                ],
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: ElevatedButton(
-                                    onPressed: () =>
-                                        _showModelSearchDialog(part),
-                                    child: const Text('Link New Model'),
-                                  ),
-                                ),
-                              ],
+                              ),
                             ),
                           ),
                         ),
@@ -438,6 +549,7 @@ class _ModelPartsScreenState extends State<ModelPartsScreen> {
             ),
       floatingActionButton: FloatingActionButton(
         onPressed: _showAddPartDialog,
+        tooltip: 'Add New Part',
         child: const Icon(Icons.add),
       ),
     );
